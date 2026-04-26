@@ -1084,15 +1084,35 @@ function initPeer() {
   myPeerId = 'mb-' + genCode();
   document.getElementById('inviteCode').textContent = myPeerId.replace('mb-', '');
   try {
-    peer = new Peer(myPeerId);
+    peer = new Peer(myPeerId, {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+        ],
+      },
+    });
     peer.on('open', (id) => {
       console.log('Peer ready:', id);
     });
     peer.on('connection', (c) => {
       attachConn(c);
     });
+    peer.on('disconnected', () => {
+      console.warn('Peer disconnected from signaling server, attempting reconnect...');
+      try { peer.reconnect(); } catch (e) { console.warn('reconnect failed', e); }
+    });
     peer.on('error', (err) => {
       console.warn('Peer error:', err.type, err);
+      // Network/server hiccups: try to reconnect to the signaling server.
+      if (err && (err.type === 'network' || err.type === 'disconnected' || err.type === 'server-error')) {
+        if (peer && peer.disconnected && !peer.destroyed) {
+          try { peer.reconnect(); } catch (e) { /* ignore */ }
+        }
+      }
     });
   } catch (e) {
     console.warn('PeerJS init failed', e);
@@ -1543,10 +1563,25 @@ function setupShareModal() {
     }
     if (!peer) { showToast('Соединение не готово'); return; }
     try {
-      const c = peer.connect('mb-' + code, { reliable: true });
-      attachConn(c);
-      modal.classList.remove('show');
-      showToast('Подключаюсь...');
+      const doConnect = () => {
+        try {
+          const c = peer.connect('mb-' + code, { reliable: true });
+          attachConn(c);
+          modal.classList.remove('show');
+          showToast('Подключаюсь...');
+        } catch (err) {
+          showToast('Не удалось подключиться');
+        }
+      };
+      // PeerJS бросает «Cannot connect to new Peer after disconnecting» —
+      // сначала восстановим связь с сигналингом, потом звоним.
+      if (peer.disconnected && !peer.destroyed) {
+        showToast('Восстанавливаю соединение...');
+        try { peer.reconnect(); } catch (e) { /* ignore */ }
+        setTimeout(doConnect, 1000);
+      } else {
+        doConnect();
+      }
     } catch (e) {
       showToast('Не удалось подключиться');
     }
